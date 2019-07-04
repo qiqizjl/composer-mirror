@@ -31,9 +31,11 @@ class DaemonCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
+
         $cloud = App::getInstance()->getCloud();
+
         $this->wp = new WorkerPool();
-        $this->wp->setWorkerPoolSize(10)->create(new ClosureWorker (
+        $this->wp->setWorkerPoolSize(100)->create(new ClosureWorker (
 
             function ($jobData, $semaphone, $storage) use ($cloud) {
                 $cloud->{$jobData->method}($jobData->data);
@@ -60,7 +62,7 @@ class DaemonCommand extends Command
 
         while (1) {
 
-            $job = $beanstalk->reserve(15); // Block until job is available.
+            $job = $beanstalk->reserve(20); // Block until job is available.
             if (!$job) break;
 
             $jobData = json_decode($job->getData());
@@ -119,7 +121,7 @@ class DaemonCommand extends Command
             $result = $cloud->{$jobData->method}($jobData->data);
             // 上传 packages.json 成功
             if ($result > 0) {
-                $cloud->refreshRemoteFile($config->mirrorUrl . '/packages.json');
+                //$cloud->refreshRemoteFile($config->mirrorUrl . '/packages.json');
             }
 
             $packages = json_decode(file_get_contents($config->cachedir . 'packages.json'));

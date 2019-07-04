@@ -61,7 +61,7 @@ class CrawlerCommand extends Command
             $clientHandler = App::getClientHandler();
             $stats = $clientHandler->stats();
             if (intval($stats['current-jobs-ready']) > 0) {
-                Log::warn('还有未完成的jobs，继续等待');
+                Log::warn('还有未完成的jobs，继续等待'.$stats["current-jobs-ready"]);
                 sleep(30);
                 exit();
             }
@@ -121,7 +121,6 @@ class CrawlerCommand extends Command
             $fileurl = str_replace('%hash%', $version->sha256, $tpl);
             $cachename = $cachedir . $fileurl;
             $providers[] = $cachename;
-
             if (!file_exists($cachename)) {
                 $data = $this->request($config->packagistUrl . '/' . $fileurl);
                 if ($data) {
@@ -314,7 +313,7 @@ class CrawlerCommand extends Command
         $packages = json_decode(file_get_contents($cachedir.'packages.json.new'));
         $packages->mirrors = [
             [
-                'dist-url' => $config->distUrl . '%package%/%reference%.%type%',
+                'dist-url' => $config->distUrl . '/%package%/%reference%.%type%',
                 'preferred' => true,
             ]
         ];

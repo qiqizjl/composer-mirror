@@ -12,6 +12,7 @@ use GuzzleHttp\Client;
 use GuzzleHttp\RequestOptions;
 use League\Flysystem\Config;
 use League\Flysystem\Filesystem;
+use Overtrue\Flysystem\Qiniu\QiniuAdapter;
 use ZenCodex\ComposerMirror\Support\ClientHandlerPlugin;
 
 class Cloud
@@ -32,7 +33,7 @@ class Cloud
      * 根据 $ext (json/zip) 创建对应 bucket 的对象
      *
      * @param [type] $ext
-     * @return void
+     * @return Filesystem
      */
     public function cloudDisk($ext = 'json')
     {
@@ -40,7 +41,7 @@ class Cloud
             $cloudConfig = $this->config->cloudDisk->config;
             $cloudConfig['bucket'] = $this->config->cloudDisk->bucketMap[$ext];
 
-            $adapter = new $this->config->cloudDisk->adapter($cloudConfig);
+            $adapter = new $this->config->cloudDisk->adapter($cloudConfig["accessKey"],$cloudConfig["secretKey"],$cloudConfig["bucket"],"");
             $cloudDisk = new Filesystem($adapter, new Config([ 'disable_asserts' => true]));
             $cloudDisk->addPlugin(new ClientHandlerPlugin());
 
@@ -56,17 +57,17 @@ class Cloud
         if ($ext == 'zip') {
             $start = strlen($this->config->distdir);
             $uri = substr($file, $start);
-            $postUrl = file_get_contents($file);
+            $tmpfile = file_get_contents($file);
 
-            $tmpfile = tempnam(null, 'composer_');
-            try {
-                $downloader = new Client([ RequestOptions::TIMEOUT => $this->config->timeout ]);
-                $downloader->get($postUrl, ['sink' => $tmpfile]);
-            } catch (\Exception $e) {
-                Log::error('pushOneFile '. $file .' => github/xxxx error!!!');
-                Log::error($e->getMessage());
-                $tmpfile = '';
-            }
+            //$tmpfile = tempnam(null, 'composer_');
+            //try {
+            //    $downloader = new Client([ RequestOptions::TIMEOUT => $this->config->timeout ]);
+            //    $downloader->get($postUrl, ['sink' => $tmpfile]);
+            //} catch (\Exception $e) {
+            //    Log::error('pushOneFile '. $file .' => github/xxxx error!!!');
+            //    Log::error($e->getMessage());
+            //    $tmpfile = '';
+            //}
         } else if ($ext == 'json') {
             $start = strlen($this->config->cachedir);
             $uri = substr($file, $start);
@@ -103,17 +104,25 @@ class Cloud
         if (empty($tmpfile)) goto __END__;
 
         try {
-            $f = fopen($tmpfile, 'rb');
-            // 根据扩展名指定bucket，上传到又拍云
-            $this->cloudDisk($ext)->writeStream($uri, $f);
-            Log::debug('pushOneFile success => '. $file);
-            $ret = 1;
+           if ($ext=="zip"){
+               //go(function () use($ext,$uri,$tmpfile){
+                   $result = $this->cloudDisk($ext)->getAdapter()->asyncFetch($uri,$tmpfile);
+               Log::debug('fetch success => '. json_encode($result));
+                   //var_dump($result);
+               //});
+           }else{
+               $f = fopen($tmpfile, 'rb');
+               // 根据扩展名指定bucket，上传到又拍云
+               $this->cloudDisk($ext)->writeStream($uri, $f);
+               Log::debug('pushOneFile success => '. $file);
+               $ret = 1;
+           }
         } catch (\Exception $e) {
             Log::error("pushOneFile => $file \n" . $e->getMessage());
         }
 
     __END__:
-        $ext == 'zip' and file_exists($tmpfile) and unlink($tmpfile);
+        //$ext == 'zip' and file_exists($tmpfile) and unlink($tmpfile);
         return $ret;
     }
 
@@ -166,8 +175,9 @@ class Cloud
     public function refreshRemoteFile($remoteUrl)
     {
         try {
-            $cloudClient = $this->cloudDisk()->getClientHandler();
-            $result = $cloudClient->purge($remoteUrl);
+            /** @var QiniuAdapter $cloudClient */
+            $cloudClient = $this->cloudDisk()->getAdapter();
+            $result = $cloudClient->refresh($remoteUrl);
             Log::debug("refreshCdnCache => $remoteUrl \n");
         } catch (\Exception $e) {
             Log::error('refreshCdnCache => '. $e->getMessage());
