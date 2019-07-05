@@ -35,7 +35,7 @@ class DaemonCommand extends Command
         $cloud = App::getInstance()->getCloud();
 
         $this->wp = new WorkerPool();
-        $this->wp->setWorkerPoolSize(100)->create(new ClosureWorker (
+        $this->wp->setWorkerPoolSize(20)->create(new ClosureWorker (
 
             function ($jobData, $semaphone, $storage) use ($cloud) {
                 $cloud->{$jobData->method}($jobData->data);
@@ -66,7 +66,7 @@ class DaemonCommand extends Command
             if (!$job) break;
 
             $jobData = json_decode($job->getData());
-            if (!method_exists($cloud, $jobData->method)) throw new \RuntimeException('找不到此方法 => ' . $jobData->method);
+            if (!method_exists($cloud, $jobData->method)) throw new \RuntimeException('找不到此方法 => ' . $jobData->method.'==>>>'.$job->getData());
 
             // 只处理最后一个 packages.json，其余的多进程处理
             if ($this->isMainPackageFile($jobData)) {

@@ -13,12 +13,13 @@ use GuzzleHttp\RequestOptions;
 use League\Flysystem\Config;
 use League\Flysystem\Filesystem;
 use Overtrue\Flysystem\Qiniu\QiniuAdapter;
+use Qiniu\Http\Response;
 use ZenCodex\ComposerMirror\Support\ClientHandlerPlugin;
 
 class Cloud
 {
     private $config;
-    private $lastUpload = [];
+    private $lastUpload  = [];
     private $_cloudDisks = ['json' => null, 'zip' => null];
 
     const JSON_CACHE_FILE = 'cached.json';
@@ -38,11 +39,12 @@ class Cloud
     public function cloudDisk($ext = 'json')
     {
         if (!$this->_cloudDisks[$ext]) {
-            $cloudConfig = $this->config->cloudDisk->config;
+            $cloudConfig           = $this->config->cloudDisk->config;
             $cloudConfig['bucket'] = $this->config->cloudDisk->bucketMap[$ext];
 
-            $adapter = new $this->config->cloudDisk->adapter($cloudConfig["accessKey"],$cloudConfig["secretKey"],$cloudConfig["bucket"],"");
-            $cloudDisk = new Filesystem($adapter, new Config([ 'disable_asserts' => true]));
+            $adapter   = new $this->config->cloudDisk->adapter($cloudConfig["accessKey"], $cloudConfig["secretKey"],
+                $cloudConfig["bucket"], "");
+            $cloudDisk = new Filesystem($adapter, new Config(['disable_asserts' => true]));
             $cloudDisk->addPlugin(new ClientHandlerPlugin());
 
             $this->_cloudDisks[$ext] = $cloudDisk;
@@ -55,25 +57,30 @@ class Cloud
     {
         $ext = pathinfo($file, PATHINFO_EXTENSION);
         if ($ext == 'zip') {
-            $start = strlen($this->config->distdir);
-            $uri = substr($file, $start);
-            $tmpfile = file_get_contents($file);
+            $start   = strlen($this->config->distdir);
+            $uri     = substr($file, $start);
+            $postUrl = file_get_contents($file);
 
-            //$tmpfile = tempnam(null, 'composer_');
-            //try {
-            //    $downloader = new Client([ RequestOptions::TIMEOUT => $this->config->timeout ]);
-            //    $downloader->get($postUrl, ['sink' => $tmpfile]);
-            //} catch (\Exception $e) {
-            //    Log::error('pushOneFile '. $file .' => github/xxxx error!!!');
-            //    Log::error($e->getMessage());
-            //    $tmpfile = '';
-            //}
-        } else if ($ext == 'json') {
-            $start = strlen($this->config->cachedir);
-            $uri = substr($file, $start);
-            $tmpfile = $file;
+            $tmpfile = tempnam(null, 'composer_');
+            try {
+                $downloader = new Client([
+                    RequestOptions::TIMEOUT => $this->config->timeout,
+                    RequestOptions::PROXY   => "http://proxy.mibbs.vip:2345",
+                ]);
+                $downloader->get($postUrl, ['sink' => $tmpfile]);
+            } catch (\Exception $e) {
+                Log::error('pushOneFile ' . $file . ' => github/xxxx error!!!');
+                Log::error($e->getMessage());
+                $tmpfile = '';
+            }
         } else {
-            throw new \RuntimeException("不支持的文件扩展 $ext");
+            if ($ext == 'json') {
+                $start   = strlen($this->config->cachedir);
+                $uri     = substr($file, $start);
+                $tmpfile = $file;
+            } else {
+                throw new \RuntimeException("不支持的文件扩展 $ext");
+            }
         }
 
         return [$ext, $uri, $tmpfile];
@@ -100,66 +107,82 @@ class Cloud
             sleep(30);
         }
 
+        $ext = pathinfo($file, PATHINFO_EXTENSION);
+        if ($ext == "zip") {
+            $start = strlen($this->config->distdir);
+            $uri   = substr($file, $start);
+        } else {
+            $start = strlen($this->config->cachedir);
+            $uri   = substr($file, $start);
+        }
+        //CDN中存在文件就不上传 防止重新上行
+        if ($this->cloudDisk($ext)->has($uri) && $uri != "packages.json") {
+            Log::debug('keep success => ' . $file);
+            return true;
+        }
         [$ext, $uri, $tmpfile] = $this->pickFileInfo($file);
-        if (empty($tmpfile)) goto __END__;
+        if (empty($tmpfile)) {
+            goto __END__;
+        }
 
         try {
-           if ($ext=="zip"){
-               //go(function () use($ext,$uri,$tmpfile){
-                   $result = $this->cloudDisk($ext)->getAdapter()->asyncFetch($uri,$tmpfile);
-               Log::debug('fetch success => '. json_encode($result));
-                   //var_dump($result);
-               //});
-           }else{
-               $f = fopen($tmpfile, 'rb');
-               // 根据扩展名指定bucket，上传到又拍云
-               $this->cloudDisk($ext)->writeStream($uri, $f);
-               Log::debug('pushOneFile success => '. $file);
-               $ret = 1;
-           }
+            $f = fopen($tmpfile, 'rb');
+            // 根据扩展名指定bucket，上传到又拍云
+            /** @var QiniuAdapter $adapter */
+            $adapter = $this->cloudDisk($ext)->getAdapter();
+            $result  = $adapter->writeFile($uri, $tmpfile);
+
+            Log::debug('pushOneFile success => ' . $file . json_encode($result));
+            $ret = 1;
         } catch (\Exception $e) {
             Log::error("pushOneFile => $file \n" . $e->getMessage());
         }
 
-    __END__:
-        //$ext == 'zip' and file_exists($tmpfile) and unlink($tmpfile);
+        __END__:
+        $ext == 'zip' and file_exists($tmpfile) and unlink($tmpfile);
         return $ret;
     }
 
     public function prefetchDistFile($zipFile)
     {
-        $start = strlen($this->config->distdir);
-        $uri = substr($zipFile, $start);
+        $start   = strlen($this->config->distdir);
+        $uri     = substr($zipFile, $start);
         $postUrl = file_get_contents($zipFile);
 
-        $tasks = [[
-            'url' => $postUrl,
-            'overwrite' => true,
-            'save_as' => $uri,
-        ]];
+        $tasks = [
+            [
+                'url'       => $postUrl,
+                'overwrite' => true,
+                'save_as'   => $uri,
+            ],
+        ];
 
         try {
             $cloudClient = $this->cloudDisk('zip')->getClientHandler(['processNotifyUrl' => 'http://127.0.0.1']);
-            $result = $cloudClient->process($tasks, Upyun::$PROCESS_TYPE_SYNC_FILE);
+            $result      = $cloudClient->process($tasks, Upyun::$PROCESS_TYPE_SYNC_FILE);
             Log::info('prefetchDistFile => ' . $zipFile);
         } catch (\Exception $e) {
-            Log::error('prefetchDistFile => '. $e->getMessage());
+            Log::error('prefetchDistFile => ' . $e->getMessage());
         }
     }
 
     public function removeRemoteFile($file)
     {
-        if (strpos($file, 'composer.phar') > 0) return;
+        if (strpos($file, 'composer.phar') > 0) {
+            return;
+        }
 
         $ext = pathinfo($file, PATHINFO_EXTENSION);
         if ($ext == 'zip') {
             $start = strlen($this->config->distdir);
-            $uri = substr($file, $start);
-        } else if ($ext == 'json') {
-            $start = strlen($this->config->cachedir);
-            $uri = substr($file, $start);
+            $uri   = substr($file, $start);
         } else {
-            return false;
+            if ($ext == 'json') {
+                $start = strlen($this->config->cachedir);
+                $uri   = substr($file, $start);
+            } else {
+                return false;
+            }
         }
 
         try {
@@ -167,7 +190,7 @@ class Cloud
             Log::info('removeRemoteFile => ' . $file);
             return true;
         } catch (\Exception $e) {
-            Log::error('removeRemoteFile => '. $e->getMessage());
+            Log::error('removeRemoteFile => ' . $e->getMessage());
             return false;
         }
     }
@@ -177,10 +200,10 @@ class Cloud
         try {
             /** @var QiniuAdapter $cloudClient */
             $cloudClient = $this->cloudDisk()->getAdapter();
-            $result = $cloudClient->refresh($remoteUrl);
+            $result      = $cloudClient->refresh($remoteUrl);
             Log::debug("refreshCdnCache => $remoteUrl \n");
         } catch (\Exception $e) {
-            Log::error('refreshCdnCache => '. $e->getMessage());
+            Log::error('refreshCdnCache => ' . $e->getMessage());
         }
     }
 }

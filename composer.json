@@ -12,7 +12,7 @@
         "upyun/sdk": "^3.3",
         "qxsch/worker-pool": "^1.5",
         "guiguiboy/php-cli-progress-bar": "dev-master",
-        "php": ">=5.6",
+        "php": ">=7.1",
         "ext-json": "*",
         "ext-hash": "*",
         "ext-curl": "*",

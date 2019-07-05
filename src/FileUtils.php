@@ -90,6 +90,7 @@ class FileUtils extends InstanceBase
 
         $i = $j = 0;
         $errCount = $touchCount = $allCount = 0;
+        $config = App::getConfig();
 
         foreach ($packagejson->{'provider-includes'} as $tpl => $provider) {
             $providerjson = str_replace('%hash%', $provider->sha256, $tpl);
@@ -103,6 +104,8 @@ class FileUtils extends InstanceBase
 
                 if (!file_exists($file)) {
                     Log::error('LOST FILE => ' . $file);
+
+                    //$app->pushJob2Task($config->packagistUrl."/p/$tpl2\$$sha->sha256.json");
                     ++$i;
                 } elseif ($sha->sha256 !== hash_file('sha256', $file)) {
                     Log::error('HASH ERROR => ' . $file);
